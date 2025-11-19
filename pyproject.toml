@@ -1,0 +1,15 @@
+[project]
+name = "ciirc-veins"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "matplotlib>=3.10.7",
+    "napari>=0.6.6",
+    "networkx>=3.5",
+    "nibabel>=5.3.2",
+    "scikit-image>=0.25.2",
+    "scikit-fmm>=2023.4.2",
+    "scipy>=1.16.3",
+]
