@@ -1,6 +1,6 @@
-import slicer
+import slicer  # type: ignore
 import numpy as np
-import vtk
+import vtk  # type: ignore
 
 # ---------------------------------------------------------
 # USER INPUTS

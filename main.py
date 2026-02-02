@@ -2,7 +2,6 @@ import nibabel as nib
 import numpy as np
 import matplotlib.pyplot as plt
 import networkx as nx
-import itertools
 import skfmm
 import os
 import glob
@@ -14,21 +13,40 @@ from scipy.spatial import KDTree
 # ==========================================
 # CONFIGURATION
 # ==========================================
-FILE_PATH = "data/seg.nii"
 MANUAL_PIXEL_SIZE = None  # Set to e.g., (0.5, 0.5) for manual pixel size in mm (x, y)
+
+# Analysis parameters
+FMM_WAYPOINT_INTERVAL_MM = 2.0  # Interval for waypoint sampling in FMM refinement
+DIAMETER_SMOOTHING_SIGMA = 3.0  # Gaussian smoothing sigma for diameter profile
+CURVATURE_SMOOTHING_SIGMA = 5.0  # Gaussian smoothing sigma for curvature calculation
+CORRIDOR_RADIUS_FACTOR = 1.2  # Factor to expand corridor around skeleton for FMM
+MIN_CORRIDOR_RADIUS = 1.5  # Minimum corridor radius in pixels
+FMM_STEP_SIZE = 0.5  # Step size for FMM gradient descent
+VIEW_PADDING = 20  # Padding around segmentation for interactive view
+REPORT_PADDING = 40  # Padding around segmentation for report visualization
+
+
+def get_report_path(nii_path):
+    """Returns the report path for a given NIfTI file, handling .nii and .nii.gz."""
+    if nii_path.endswith(".nii.gz"):
+        return nii_path[:-7] + "_report.png"
+    elif nii_path.endswith(".nii"):
+        return nii_path[:-4] + "_report.png"
+    else:
+        return nii_path + "_report.png"
 
 
 def load_and_preprocess(nii_path, manual_pixel_size=None):
     """Loads NIfTI file and extracts binary mask and pixel dimensions."""
     print(f"Loading {nii_path}...")
     img = nib.load(nii_path)
-    data = img.get_fdata()
+    data = np.asarray(img.dataobj)
     data_2d = np.squeeze(data)
     binary_mask = (data_2d > 0).astype(np.uint8)
 
     # Get pixel dimensions
     header = img.header
-    zooms = header.get_zooms()
+    zooms = header.get_zooms()[:3]
     if manual_pixel_size:
         ps_x, ps_y = manual_pixel_size
     else:
@@ -47,6 +65,7 @@ def skeletonize_and_graph(binary_mask, ps_x, ps_y):
     # Build graph from skeleton points
     g = nx.Graph()
     points = list(zip(x_coords, y_coords))
+    points_set = set(points)  # O(1) lookup for neighbor checking
     for p in points:
         g.add_node(p)
 
@@ -56,74 +75,10 @@ def skeletonize_and_graph(binary_mask, ps_x, ps_y):
                 if dx == 0 and dy == 0:
                     continue
                 neighbor = (p[0] + dx, p[1] + dy)
-                if neighbor in points:
+                if neighbor in points_set:
                     dist_mm = np.sqrt((dx * ps_x) ** 2 + (dy * ps_y) ** 2)
                     g.add_edge(p, neighbor, weight=dist_mm)
     return g, dist_map
-
-
-def extract_longest_path(g):
-    """Finds the longest simple path in the graph between endpoints."""
-    print("Calculating longest path...")
-    if len(g.nodes) == 0:
-        return [], 0
-
-    sub_graphs = [g.subgraph(c).copy() for c in nx.connected_components(g)]
-    main_graph = max(sub_graphs, key=len)
-    endpoints = [n for n in main_graph.nodes() if main_graph.degree(n) == 1]
-
-    longest_path = []
-    max_length_mm = 0
-
-    # 1. Find furthest endpoints
-    best_pair = None
-    max_shortest_dist = 0
-
-    if len(endpoints) >= 2:
-        for start, end in itertools.combinations(endpoints, 2):
-            try:
-                length = nx.shortest_path_length(
-                    main_graph, start, end, weight="weight"
-                )
-                if length > max_shortest_dist:
-                    max_shortest_dist = length
-                    best_pair = (start, end)
-            except nx.NetworkXNoPath:
-                continue
-
-    # 2. Find longest simple path (handles loops)
-    if best_pair:
-        start, end = best_pair
-        print(f"Finding longest path between {start} and {end}...")
-        try:
-            # Use a generator to find all simple paths and pick the longest
-            # Note: This can be slow for very complex graphs, but skeletons are usually simple
-            simple_paths = nx.all_simple_paths(main_graph, start, end)
-
-            def get_path_length(path):
-                length = 0
-                for i in range(len(path) - 1):
-                    u, v = path[i], path[i + 1]
-                    length += main_graph[u][v]["weight"]
-                return length
-
-            for path in simple_paths:
-                l = get_path_length(path)
-                if l > max_length_mm:
-                    max_length_mm = l
-                    longest_path = path
-
-        except Exception as e:
-            print(f"Error finding longest simple path: {e}")
-            # Fallback to shortest path
-            longest_path = nx.shortest_path(main_graph, start, end, weight="weight")
-            max_length_mm = max_shortest_dist
-
-    elif len(main_graph.nodes) > 0:
-        # Fallback if no endpoints (e.g. a closed loop)
-        longest_path = list(main_graph.nodes)
-
-    return longest_path, max_length_mm
 
 
 def get_user_path(g, binary_mask):
@@ -143,7 +98,7 @@ def get_user_path(g, binary_mask):
     # Crop to segmentation
     y_indices, x_indices = np.where(binary_mask > 0)
     if len(y_indices) > 0 and len(x_indices) > 0:
-        pad = 20
+        pad = VIEW_PADDING
         y_min = max(0, y_indices.min() - pad)
         y_max = min(binary_mask.shape[0], y_indices.max() + pad)
         x_min = max(0, x_indices.min() - pad)
@@ -250,7 +205,7 @@ def compute_fmm_segment(start_node, end_node, speed, mask):
 
     gy, gx = np.gradient(t_grid)
 
-    step_size = 0.5
+    step_size = FMM_STEP_SIZE
     max_steps = int(mask.size)
 
     for _ in range(max_steps):
@@ -288,7 +243,7 @@ def compute_centerline_fmm(binary_mask, longest_path_graph, dist_map, ps_x, ps_y
     """Refines the centerline using FMM within a corridor around the graph path."""
     # Sample waypoints to follow topology
     indices = sample_waypoints_indices(
-        longest_path_graph, interval_mm=2.0, ps_x=ps_x, ps_y=ps_y
+        longest_path_graph, interval_mm=FMM_WAYPOINT_INTERVAL_MM, ps_x=ps_x, ps_y=ps_y
     )
     print(
         f"Refining centerline using Fast Marching Method (Fluid-like) with {len(indices)} waypoints..."
@@ -311,7 +266,7 @@ def compute_centerline_fmm(binary_mask, longest_path_graph, dist_map, ps_x, ps_y
         skeleton_segment = longest_path_graph[idx_start : idx_end + 1]
         corridor_mask = np.zeros_like(binary_mask)
         for p in skeleton_segment:
-            r = max(dist_map[p[1], p[0]] * 1.2, 1.5)
+            r = max(dist_map[p[1], p[0]] * CORRIDOR_RADIUS_FACTOR, MIN_CORRIDOR_RADIUS)
             rr, cc = disk((p[1], p[0]), r, shape=binary_mask.shape)
             corridor_mask[rr, cc] = 1
 
@@ -364,7 +319,9 @@ def calculate_metrics(
     path_diameters_mm = path_radii * 2 * ps_x
 
     # Smooth diameter profile
-    path_diameters_mm = gaussian_filter1d(path_diameters_mm, sigma=3.0)
+    path_diameters_mm = gaussian_filter1d(
+        path_diameters_mm, sigma=DIAMETER_SMOOTHING_SIGMA
+    )
 
     avg_diameter = np.mean(path_diameters_mm)
     max_diameter = np.max(path_diameters_mm)
@@ -378,7 +335,7 @@ def calculate_metrics(
 
     # --- Curvature Profile ---
     # Smooth path to reduce derivative noise
-    sigma = 5.0
+    sigma = CURVATURE_SMOOTHING_SIGMA
     path_x_smooth = gaussian_filter1d(path_x_mm, sigma=sigma)
     path_y_smooth = gaussian_filter1d(path_y_mm, sigma=sigma)
 
@@ -452,7 +409,6 @@ def visualize_results(
     curvature,
     metrics,
     filename,
-    g=None,
 ):
     """Generates and saves a comprehensive visualization report."""
     fig = plt.figure(figsize=(16, 12))
@@ -506,7 +462,7 @@ def visualize_results(
     # Crop view to the segmentation
     y_indices, x_indices = np.where(binary_mask > 0)
     if len(y_indices) > 0 and len(x_indices) > 0:
-        pad = 40
+        pad = REPORT_PADDING
         y_min = max(0, y_indices.min() - pad)
         y_max = min(binary_mask.shape[0], y_indices.max() + pad)
         x_min = max(0, x_indices.min() - pad)
@@ -628,7 +584,7 @@ def visualize_results(
 
     plt.tight_layout()
     plt.subplots_adjust(top=0.92)  # Make room for suptitle
-    plt.savefig(filename.replace(".nii", "_report.png"), dpi=300)
+    plt.savefig(get_report_path(filename), dpi=300)
     plt.close()
 
 
@@ -671,19 +627,20 @@ def analyze_vein(nii_path):
         curvature,
         metrics,
         nii_path,
-        g,
     )
 
 
 if __name__ == "__main__":
     data_dir = "data"
-    nii_files = glob.glob(os.path.join(data_dir, "*.nii"))
-    
+    nii_files = glob.glob(os.path.join(data_dir, "*.nii")) + glob.glob(
+        os.path.join(data_dir, "*.nii.gz")
+    )
+
     for nii_path in nii_files:
-        report_path = nii_path.replace(".nii", "_report.png")
+        report_path = get_report_path(nii_path)
         if os.path.exists(report_path):
             print(f"Skipping {nii_path} (Report already exists)")
             continue
-            
+
         print(f"Processing {nii_path}...")
         analyze_vein(nii_path)
