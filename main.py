@@ -602,7 +602,7 @@ def visualize_results(
         label="Max Bend",
     )
 
-    ax3.set_title("Curvature Profile (Tortuosity)")
+    ax3.set_title("Curvature Profile")
     ax3.set_xlabel("Distance along vein (mm)")
     ax3.set_ylabel("Curvature (1/mm)")
     ax3.grid(True, alpha=0.3)
@@ -610,6 +610,7 @@ def visualize_results(
 
     # Curvature Stats
     curv_stats = (
+        f"Tortuosity: {metrics['tortuosity']:.2f}\n"
         f"Avg: {metrics['avg_curvature']:.4f} mm⁻¹\n"
         f"Max: {metrics['max_curvature']:.4f} mm⁻¹\n"
         f"Std: {metrics['std_curvature']:.4f} mm⁻¹"
