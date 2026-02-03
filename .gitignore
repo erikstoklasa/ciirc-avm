@@ -1,5 +1,7 @@
 /data
+/pre-data
 *.png
+*.zip
 
 /.ruff_cache
 /.venv
