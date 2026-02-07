@@ -1,5 +1,7 @@
 /data
 /pre-data
+/saved-scenes
+/archive
 *.png
 *.zip
 

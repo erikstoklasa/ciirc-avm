@@ -5,6 +5,7 @@ import networkx as nx
 import skfmm
 import os
 import glob
+import json
 from skimage.morphology import medial_axis
 from skimage.draw import disk
 from scipy.ndimage import distance_transform_edt, gaussian_filter1d
@@ -36,13 +37,43 @@ def get_report_path(nii_path):
         return nii_path + "_report.png"
 
 
+def get_jpg_path(nii_path):
+    """Returns the corresponding JPG path for a given NIfTI file."""
+    # Extract directory and filename
+    dir_name = os.path.dirname(nii_path)
+    base_name = os.path.basename(nii_path)
+    
+    # Remove .nii or .nii.gz extension
+    if base_name.endswith(".nii.gz"):
+        base_name = base_name[:-7]
+    elif base_name.endswith(".nii"):
+        base_name = base_name[:-4]
+    
+    # Replace 'data' directory with 'pre-data'
+    parent_dir = os.path.dirname(dir_name)
+    jpg_dir = os.path.join(parent_dir, "pre-data") if os.path.basename(dir_name) == "data" else "pre-data"
+    
+    return os.path.join(jpg_dir, base_name + ".jpg")
+
+
+def get_clicks_path(nii_path):
+    """Returns the path for saving/loading user click points."""
+    if nii_path.endswith(".nii.gz"):
+        return nii_path[:-7] + "_clicks.json"
+    elif nii_path.endswith(".nii"):
+        return nii_path[:-4] + "_clicks.json"
+    else:
+        return nii_path + "_clicks.json"
+
+
 def load_and_preprocess(nii_path, manual_pixel_size=None):
     """Loads NIfTI file and extracts binary mask and pixel dimensions."""
     print(f"Loading {nii_path}...")
     img = nib.load(nii_path)
     data = np.asarray(img.dataobj)
     data_2d = np.squeeze(data)
-    binary_mask = (data_2d > 0).astype(np.uint8)
+    # binary_mask = np.flipud((data_2d > 0).T.astype(np.uint8))
+    binary_mask = (data_2d > 0).T.astype(np.uint8)
 
     # Get pixel dimensions
     header = img.header
@@ -81,43 +112,77 @@ def skeletonize_and_graph(binary_mask, ps_x, ps_y):
     return g, dist_map
 
 
-def get_user_path(g, binary_mask):
-    """Allows user to manually select path points on an interactive plot."""
-    print("Please select the path manually on the plot...")
-    fig, ax = plt.subplots(figsize=(10, 10))
-    ax.imshow(binary_mask, cmap="gray")
+def get_user_path(g, binary_mask, nii_path=None):
+    """Allows user to manually select path points on an interactive plot.
+    Loads saved clicks if available, otherwise opens interactive plot and saves clicks."""
 
-    # Show graph edges
-    for u, v in g.edges():
-        ax.plot([u[0], v[0]], [u[1], v[1]], "c-", linewidth=0.5, alpha=0.5)
+    # Try to load saved clicks
+    clicks_path = get_clicks_path(nii_path) if nii_path else None
+    if clicks_path and os.path.exists(clicks_path):
+        print(f"Loading saved click points from {clicks_path}...")
+        with open(clicks_path, "r") as f:
+            points = [tuple(p) for p in json.load(f)]
+        print(f"Loaded {len(points)} saved click points.")
+    else:
+        print("Please select the path manually on the plot...")
 
-    ax.set_title(
-        "LEFT CLICK to add points in order.\nRIGHT CLICK to remove last point.\nENTER to finish."
-    )
+        # Check if JPG reference image exists
+        jpg_img = None
+        if nii_path is not None:
+            jpg_path = get_jpg_path(nii_path)
+            if os.path.exists(jpg_path):
+                jpg_img = plt.imread(jpg_path)
+                print(f"Loaded reference image: {jpg_path}")
+            else:
+                print(f"No reference image found at {jpg_path}")
 
-    # Crop to segmentation
-    y_indices, x_indices = np.where(binary_mask > 0)
-    if len(y_indices) > 0 and len(x_indices) > 0:
-        pad = VIEW_PADDING
-        y_min = max(0, y_indices.min() - pad)
-        y_max = min(binary_mask.shape[0], y_indices.max() + pad)
-        x_min = max(0, x_indices.min() - pad)
-        x_max = min(binary_mask.shape[1], x_indices.max() + pad)
+        if jpg_img is not None:
+            fig, (ax_ref, ax) = plt.subplots(1, 2, figsize=(20, 10))
+            ax_ref.imshow(jpg_img)
+            ax_ref.set_title("Reference Image")
+            ax_ref.axis("off")
+        else:
+            fig, ax = plt.subplots(figsize=(10, 10))
 
-        ax.set_xlim(x_min, x_max)
-        ax.set_ylim(y_max, y_min)
+        ax.imshow(binary_mask, cmap="gray")
 
-    print("Interactive plot opened. Please click points in the window.")
+        # Show graph edges
+        for u, v in g.edges():
+            ax.plot([u[0], v[0]], [u[1], v[1]], "c-", linewidth=0.5, alpha=0.5)
 
-    # Get user clicks (unlimited until Enter)
-    points = plt.ginput(n=-1, timeout=0, show_clicks=True)
-    plt.close(fig)
+        ax.set_title(
+            "LEFT CLICK to add points in order.\nRIGHT CLICK to remove last point.\nENTER to finish."
+        )
 
-    if not points:
-        print("No points selected.")
-        return []
+        # Crop to segmentation
+        y_indices, x_indices = np.where(binary_mask > 0)
+        if len(y_indices) > 0 and len(x_indices) > 0:
+            pad = VIEW_PADDING
+            y_min = max(0, y_indices.min() - pad)
+            y_max = min(binary_mask.shape[0], y_indices.max() + pad)
+            x_min = max(0, x_indices.min() - pad)
+            x_max = min(binary_mask.shape[1], x_indices.max() + pad)
 
-    print(f"User selected {len(points)} points. Calculating path...")
+            ax.set_xlim(x_min, x_max)
+            ax.set_ylim(y_max, y_min)
+
+        print("Interactive plot opened. Please click points in the window.")
+
+        # Get user clicks (unlimited until Enter)
+        points = plt.ginput(n=-1, timeout=0, show_clicks=True)
+        plt.close(fig)
+
+        if not points:
+            print("No points selected.")
+            return []
+
+        # Save clicks for future reuse
+        if clicks_path:
+            with open(clicks_path, "w") as f:
+                json.dump([list(p) for p in points], f)
+            print(f"Saved click points to {clicks_path}")
+
+    print(f"Using {len(points)} click points. Calculating path...")
 
     # Map clicks to nearest graph nodes
     node_coords = np.array(g.nodes())
@@ -594,7 +659,7 @@ def analyze_vein(nii_path):
     g, dist_map = skeletonize_and_graph(binary_mask, ps_x, ps_y)
 
     # Get path from user
-    longest_path_graph = get_user_path(g, binary_mask)
+    longest_path_graph = get_user_path(g, binary_mask, nii_path)
 
     if not longest_path_graph:
         print("No path found.")
