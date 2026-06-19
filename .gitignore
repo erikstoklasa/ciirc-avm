@@ -8,5 +8,12 @@
 /.ruff_cache
 /.venv
 /__pycache__
+*.nii
+*.json
+*.pyc
+*.pkl
+*.b2nd
+*.txt
+*.pth
 
 .DS_Store

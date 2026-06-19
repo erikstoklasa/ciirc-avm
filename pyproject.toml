@@ -12,4 +12,25 @@ dependencies = [
     "scikit-image>=0.25.2",
     "scikit-fmm>=2023.4.2",
     "scipy>=1.16.3",
+    "openpyxl>=3.1.5",
+    "pyqt6>=6.11.0",
+]
+
+[project.optional-dependencies]
+# Heavy ML stack for the nnU-Net segmentation pipeline (nnunet/).
+# Install with:  uv sync --extra nnunet
+nnunet = [
+    "nnunetv2>=2.5",
+    "pillow>=10.0",
+    "torch>=2.1",
+]
+
+# Classical semi-automatic segmentation (edge_em/): Frangi vesselness + EM,
+# seeded by foreground/background scribbles. Frangi, Canny and random_walker
+# all come from the existing scikit-image dep; only scikit-learn (GMM-EM) and
+# pillow (image I/O) are new. CPU-only, no trained model.
+# Install with:  uv sync --extra edge-em
+edge-em = [
+    "scikit-learn>=1.4",
+    "pillow>=10.0",
 ]
