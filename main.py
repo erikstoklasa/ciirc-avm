@@ -520,9 +520,16 @@ def fit_centerline_spline(longest_path, ps_x, ps_y, cumulative_dist):
 
 
 def calculate_metrics(
-    longest_path, binary_mask, ps_x, ps_y, max_length_mm, dist_map=None
+    longest_path, binary_mask, ps_x, ps_y, max_length_mm
 ):
-    """Computes geometric metrics (length, tortuosity, diameter, curvature) for the path."""
+    """Computes geometric metrics (length, tortuosity, diameter, curvature) for the path.
+
+    The diameter/volume calc recomputes a spacing-aware Euclidean distance transform
+    internally (``sampling=(ps_y, ps_x)``) so radii come out in millimetres even when
+    ``ps_x != ps_y``. It deliberately does *not* accept a precomputed map: a pixel-space
+    one (e.g. ``medial_axis``'s output) would silently bias diameters and volume under
+    anisotropic spacing.
+    """
     # Convert to numpy for calculations
     path_arr = np.array(longest_path)
 
@@ -543,13 +550,19 @@ def calculate_metrics(
     tortuosity = max_length_mm / chord_length_mm if chord_length_mm > 0 else 1.0
 
     # --- Diameter Profile ---
-    if dist_map is None:
-        dist_map = distance_transform_edt(binary_mask)
-
-    path_radii = np.array(
-        [dist_map[int(round(p[1])), int(round(p[0]))] for p in longest_path]
+    # Local vessel radius = Euclidean distance from each path point to the nearest
+    # background pixel. It is computed as a *spacing-aware* distance transform so the
+    # radii come out directly in millimetres even when ps_x != ps_y. The earlier code
+    # used a pixel-space map (medial_axis or EDT without sampling) scaled by ps_x
+    # only, which both assumed square pixels for the radius itself and then ignored
+    # ps_y in the px->mm step -- so every diameter (and the volume) was silently
+    # biased under anisotropic spacing. binary_mask is laid out (rows=Y, cols=X), so
+    # the per-axis sampling is (ps_y, ps_x).
+    dist_map_mm = distance_transform_edt(binary_mask, sampling=(ps_y, ps_x))
+    path_radii_mm = np.array(
+        [dist_map_mm[int(round(p[1])), int(round(p[0]))] for p in longest_path]
     )
-    path_diameters_mm = path_radii * 2 * ps_x
+    path_diameters_mm = path_radii_mm * 2.0
 
     # Smooth diameter profile
     path_diameters_mm = gaussian_filter1d(
@@ -573,14 +586,13 @@ def calculate_metrics(
         longest_path, ps_x, ps_y, cumulative_dist
     )
 
-    # Cap curvature at the local physical limit. path_radii (px) is the lumen
-    # radius from the distance map at each path point; the centerline cannot bend
-    # tighter than 1/(factor · r) without the lumen self-intersecting, so anything
-    # above that is a projection-fold artifact, not real geometry. Capping the
-    # *signed* curvature keeps inflection signs intact for count_curves while
+    # Cap curvature at the local physical limit. path_radii_mm is the lumen radius
+    # (in mm) from the spacing-aware distance map at each path point; the centerline
+    # cannot bend tighter than 1/(factor · r) without the lumen self-intersecting,
+    # so anything above that is a projection-fold artifact, not real geometry. Capping
+    # the *signed* curvature keeps inflection signs intact for count_curves while
     # removing the spike from max/std and the ∫|κ|ds total-turn integral.
-    ps_mean = 0.5 * (ps_x + ps_y)
-    radius_mm = path_radii * ps_mean
+    radius_mm = path_radii_mm
     kappa_max = np.divide(
         1.0,
         CURVATURE_CAP_RADIUS_FACTOR * radius_mm,
@@ -628,7 +640,7 @@ def calculate_metrics(
         cumulative_dist,
         path_diameters_mm,
         curvature,
-        dist_map,
+        dist_map_mm,
         signed_curvature,
     )
 
@@ -1103,10 +1115,10 @@ def analyze_vein(nii_path):
         cumulative_dist,
         path_diameters_mm,
         curvature,
-        dist_map,
+        dist_map_mm,
         signed_curvature,
     ) = calculate_metrics(
-        longest_path, binary_mask, ps_x, ps_y, max_length_mm, dist_map
+        longest_path, binary_mask, ps_x, ps_y, max_length_mm
     )
 
     # Count curves from the spline curvature: bends between inflection points.
@@ -1123,7 +1135,7 @@ def analyze_vein(nii_path):
     print_summary(metrics)
     visualize_results(
         binary_mask,
-        dist_map,
+        dist_map_mm,
         longest_path,
         cumulative_dist,
         path_diameters_mm,
