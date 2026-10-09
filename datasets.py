@@ -1,30 +1,28 @@
-"""Dataset loaders: a uniform way to get the scale, the labeled image, and the
-raw (unlabeled) image out of each DSA source, regardless of how that source is
+"""Dataset loaders: a uniform way to get the labeled image and the raw
+(unlabeled) image out of each DSA source, regardless of how that source is
 laid out on disk.
 
-Three datasets feed this project and each stores the same three things
+Three datasets feed this project and each stores the same two things
 differently:
 
 * **current** (``pre-data/{n}m.jpg``) -- one side-by-side frame. The **left**
   panel carries the clinician's red vein tracing; the **right** panel is the
-  clean copy. Scale is a green diamond bar (``X mm``).
+  clean copy.
 * **JAP** (``pre-data/JAP/JAP{n}.jpg``) -- same side-by-side layout: **left**
   panel has the orange tracing + yellow annotations, **right** panel is clean.
-  Scale is a centimetre tick ruler along the bottom.
 * **TJU** (``pre-data/TJU/TJU{n}.png``) -- the labeled and raw versions are two
   *separate* files: ``TJU{n} tracked.png`` is the traced one, ``TJU{n}.png`` is
-  raw. Scale is a generic labelled bar (``X mm`` / ``X cm``).
+  raw.
 
 The abstraction is a single image/case at a time:
 
     loader = TJUDataset("pre-data/TJU/TJU1.png")
-    loader.get_scale()     # -> spacing.Spacing | None   (mm per pixel)
     loader.get_labeled()   # -> np.ndarray (H, W, 3)     traced version
     loader.get_raw()       # -> np.ndarray (H, W, 3)     clean version
 
-Each concrete loader implements those three accessors its own way; the scale
-detection itself is delegated to ``spacing.estimate_spacing`` with the detector
-that matches the dataset's legend style.
+Each concrete loader implements those two accessors its own way. Physical scale
+(mm/px) is measured by hand in the segmentation window (``pipeline.py``), not
+derived here.
 
 CLI:
     uv run python datasets.py current pre-data/10m.jpg
@@ -41,8 +39,6 @@ from typing import ClassVar, Iterator
 
 import numpy as np
 from PIL import Image
-
-from spacing import Spacing, estimate_spacing
 
 REPO_ROOT = Path(__file__).resolve().parent
 PRE_DATA = REPO_ROOT / "pre-data"
@@ -89,28 +85,14 @@ class DatasetLoader(ABC):
     Class attributes a subclass sets:
         name            short dataset id ("current" / "jap" / "tju")
         image_dir       default directory the dataset's images live in
-        spacing_method  spacing.py detector matching the legend style
-                        ("green" / "ruler" / "bar")
     """
 
     name: ClassVar[str]
     image_dir: ClassVar[Path]
-    spacing_method: ClassVar[str]  # the one spacing.py detector this dataset uses
 
     def __init__(self, image_path: str | Path):
         self.image_path = Path(image_path)
         self.case = self.image_path.stem
-
-    # -- scale: one detector per dataset, no auto-detection ---------------
-    def scale_source(self) -> Path:
-        """The image file the scale legend is read from (default: the source)."""
-        return self.image_path
-
-    def get_scale(self, **kwargs) -> Spacing | None:
-        """Physical scale (mm per pixel), read with this dataset's detector."""
-        return estimate_spacing(
-            self.scale_source(), method=self.spacing_method, **kwargs
-        )
 
     # -- the label/raw split, which each dataset stores differently -------
     @abstractmethod
@@ -173,8 +155,7 @@ class CurrentDataset(_PanelDataset):
 
     name = "current"
     image_dir = PRE_DATA
-    spacing_method = "green"
-    glob_pattern = "*m.jpg"
+    glob_pattern = "*[mM].jpg"
 
 
 class JAPDataset(_PanelDataset):
@@ -182,7 +163,6 @@ class JAPDataset(_PanelDataset):
 
     name = "jap"
     image_dir = PRE_DATA / "JAP"
-    spacing_method = "ruler"
     glob_pattern = "JAP*.jpg"
 
 
@@ -193,12 +173,11 @@ class TJUDataset(DatasetLoader):
     """TJU dataset: ``pre-data/TJU/TJU{n}.png`` (raw) + ``TJU{n} tracked.png``.
 
     The loader can be pointed at either file; both the raw and the tracked
-    versions are resolved from the case name. Scale is a generic labelled bar.
+    versions are resolved from the case name.
     """
 
     name = "tju"
     image_dir = PRE_DATA / "TJU"
-    spacing_method = "bar"
 
     def __init__(self, image_path: str | Path):
         super().__init__(image_path)
@@ -213,10 +192,6 @@ class TJUDataset(DatasetLoader):
     @property
     def labeled_path(self) -> Path:
         return self.image_dir / f"{self.case} tracked.png"
-
-    def scale_source(self) -> Path:
-        # Read the legend off the raw image (the tracing can occlude the bar).
-        return self.raw_path
 
     def get_labeled(self) -> np.ndarray:
         return _load_rgb(self.labeled_path)
@@ -276,9 +251,6 @@ def main() -> None:
     labeled, raw = loader.get_labeled(), loader.get_raw()
     print(f"  labeled: {labeled.shape}")
     print(f"  raw:     {raw.shape}")
-
-    scale = loader.get_scale()
-    print(f"  scale:   {scale if scale is not None else 'not detected'}")
 
     if args.save:
         out = Path(args.save)

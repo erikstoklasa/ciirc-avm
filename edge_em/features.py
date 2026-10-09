@@ -1,14 +1,10 @@
 """Stage 1: image features for the edge_em segmentation.
 
-From a DSA source image we derive two cues that drive the EM segmentation:
-
-* **Vesselness** -- a multi-scale Frangi filter response. Frangi analyses the
-  Hessian eigenvalues at several scales and lights up dark tubular structures,
-  which is exactly what spinal DSA veins are. This is the "SOTA edge detection"
-  stage: purpose-built for vessels and CPU-cheap, unlike generic learned edge
-  detectors.
-* **Canny edges** -- a classic boundary map used later as a contrast cue for the
-  random-walker spatial regularization.
+The cue that drives the EM segmentation is **vesselness** -- a multi-scale
+Frangi filter response. Frangi analyses the Hessian eigenvalues at several
+scales and lights up dark tubular structures, which is exactly what spinal DSA
+veins are. This is the "SOTA edge detection" stage: purpose-built for vessels
+and CPU-cheap, unlike generic learned edge detectors.
 
 The per-pixel feature stack handed to the EM step is ``[intensity, vesselness]``,
 both scaled to [0, 1].
@@ -23,7 +19,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import numpy as np  # noqa: E402
 from PIL import Image  # noqa: E402
-from skimage.feature import canny  # noqa: E402
 from skimage.filters import frangi  # noqa: E402
 
 import config  # noqa: E402  (local module: edge_em/config.py)
@@ -53,11 +48,15 @@ def _to_float01(gray: np.ndarray) -> np.ndarray:
     return (g - lo) / (hi - lo)
 
 
-def vesselness(gray: np.ndarray) -> np.ndarray:
-    """Multi-scale Frangi vesselness, returned in [0, 1] (H, W) float."""
+def vesselness(gray: np.ndarray, sigmas=None) -> np.ndarray:
+    """Multi-scale Frangi vesselness, returned in [0, 1] (H, W) float.
+
+    ``sigmas`` overrides ``config.FRANGI_SIGMAS`` (e.g. scaled by the image-upscale
+    factor so the same physical vessel widths are captured on a finer grid).
+    """
     response = frangi(
         _to_float01(gray),
-        sigmas=config.FRANGI_SIGMAS,
+        sigmas=config.FRANGI_SIGMAS if sigmas is None else sigmas,
         black_ridges=config.FRANGI_BLACK_RIDGES,
     )
     # Frangi output is unnormalized; rescale to [0, 1] for use as a feature.
@@ -65,11 +64,6 @@ def vesselness(gray: np.ndarray) -> np.ndarray:
     if mx > 0:
         response = response / mx
     return response.astype(np.float32)
-
-
-def edges(gray: np.ndarray) -> np.ndarray:
-    """Canny edge map (boolean (H, W)) used as a boundary cue."""
-    return canny(_to_float01(gray), sigma=config.CANNY_SIGMA)
 
 
 def feature_stack(gray: np.ndarray, vness: np.ndarray) -> np.ndarray:

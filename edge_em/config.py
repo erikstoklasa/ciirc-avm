@@ -33,9 +33,6 @@ LABELS = {"background": 0, "vessel": 1}
 FRANGI_SIGMAS = (1.0, 2.0, 3.0, 4.0, 6.0, 8.0)
 FRANGI_BLACK_RIDGES = True  # DSA veins are darker than background
 
-# --- Stage 1: Canny edges (boundary cue for regularization) --------------
-CANNY_SIGMA = 2.0
-
 # --- Stage 2: Gaussian-Mixture EM ----------------------------------------
 # One GMM per class (vessel / background), each a small mixture, fitted via EM
 # on the per-pixel feature vectors of that class's scribble pixels.
@@ -67,6 +64,16 @@ KEEP_SCRIBBLE_COMPONENTS = True
 MAX_HOLE_SIZE = 64  # fill only enclosed holes smaller than this (px);
 # keeps real loop interiors (tortuous veins) open
 
+# --- Image upscaling ------------------------------------------------------
+# The source frame is bicubically upsampled by this factor as the FIRST pipeline
+# step, so the whole segmentation stack (Frangi vesselness, GMM-EM, random walker)
+# runs on the finer grid and localizes the vessel border to sub-pixel precision.
+# The Frangi sigmas are scaled by the same factor so the same physical vessel
+# widths are still captured, and the nii spacing is divided by it, so all main.py
+# metrics stay in mm. 1 disables it (native pixel grid); 2 = 2x2 voxels per pixel
+# (4x the voxels, ~4x the EM/random-walker cost).
+UPSCALE_FACTOR = 2
+
 # --- Scribble paint tool --------------------------------------------------
 DEFAULT_BRUSH_RADIUS = 4  # px radius of a scribble stroke when rasterized
 
@@ -95,13 +102,3 @@ def right_panel_x0(gray_hw) -> int:
 def scribbles_path(case: str) -> Path:
     """Where the cached FG/BG scribbles for a case are stored."""
     return NII_DIR / f"{case}_scribbles.json"
-
-
-def overlay_path(case: str) -> Path:
-    """Where the inspection overlay PNG for a case is written."""
-    return NII_DIR / f"{case}_overlay.png"
-
-
-def nii_path(case: str) -> Path:
-    """The main.py-ready mask output path for a case."""
-    return NII_DIR / f"{case}.nii"

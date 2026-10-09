@@ -4,7 +4,7 @@ Turns a DSA source image into a ``main.py``-ready binary ``.nii`` without any
 trained model. Per image:
 
     image  --grayscale + right-panel crop-->  panel
-           --Frangi vesselness + Canny edges (Stage 1)
+           --Frangi vesselness (Stage 1)
            --FG/BG scribbles (weak user input)
            --Gaussian-Mixture EM per class (Stage 2)  -->  posterior P(vessel)
            --random-walker regularization (scribbles + posterior soft seeds)
@@ -29,7 +29,6 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-import matplotlib.pyplot as plt  # noqa: E402
 import nibabel as nib  # noqa: E402
 import numpy as np  # noqa: E402
 from scipy.special import logsumexp  # noqa: E402
@@ -201,24 +200,6 @@ def _keep_seed_components(mask: np.ndarray, fg_seeds: np.ndarray) -> np.ndarray:
 
 
 # ---------------------------------------------------------------------------
-# Visualization
-# ---------------------------------------------------------------------------
-def save_overlay(full_gray: np.ndarray, full_mask: np.ndarray, out_png: Path) -> None:
-    """Save a grayscale image with the segmentation mask overlaid in red."""
-    fig, ax = plt.subplots(figsize=(12, 10))
-    ax.imshow(full_gray, cmap="gray")
-    overlay = np.zeros((*full_mask.shape, 4), dtype=np.float32)
-    overlay[full_mask > 0] = (1.0, 0.0, 0.0, 0.45)
-    ax.imshow(overlay)
-    ax.set_title("Segmentation overlay")
-    ax.axis("off")
-    out_png.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(out_png, dpi=150, bbox_inches="tight")
-    plt.close(fig)
-    print(f"  overlay -> {out_png}")
-
-
-# ---------------------------------------------------------------------------
 # Orchestration
 # ---------------------------------------------------------------------------
 def collect_inputs(paths: list[str]) -> list[Path]:
@@ -266,10 +247,6 @@ def segment_one(
     nii_path = out_dir / f"{case}.nii"
     n_px = write_mask_nii(full_mask, nii_path, spacing)
     print(f"  {case}: {n_px} vessel px -> {nii_path}")
-
-    full_gray = np.zeros((H, W), dtype=np.uint8)
-    full_gray[:, x0 : x0 + panel.shape[1]] = panel
-    save_overlay(full_gray, full_mask, config.overlay_path(case))
 
 
 def main() -> None:
