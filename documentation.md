@@ -82,6 +82,7 @@ Constants in `main.py` lines 19–29:
 | `FMM_WAYPOINT_INTERVAL_MM` | `2.0` | Waypoint spacing for FMM centerline refinement |
 | `DIAMETER_SMOOTHING_SIGMA` | `3.0` | Gaussian sigma for diameter profile smoothing |
 | `CURVATURE_SMOOTHING_SIGMA` | `5.0` | Gaussian sigma for curvature calculation |
+| `CURVATURE_CAP_RADIUS_FACTOR` | `1.0` | Caps \|κ\| at 1/(factor × local radius), so the radius of curvature can be no smaller than `factor` vessel radii. `1.0` is the physical floor; higher clips more (see README) |
 | `CORRIDOR_RADIUS_FACTOR` | `1.2` | FMM corridor expansion factor |
 | `MIN_CORRIDOR_RADIUS` | `1.5` | Minimum FMM corridor radius (px) |
 | `FMM_STEP_SIZE` | `0.5` | Gradient descent step size for FMM backtracking |

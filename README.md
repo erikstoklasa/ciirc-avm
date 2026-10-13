@@ -189,6 +189,67 @@ clipped to
 defaults to 1.0, the hard physical floor. The signed curvature is clipped, so
 inflection signs (and so the bend counts) are preserved.
 
+#### How `r_local` is computed
+
+`r_local` is the same per-point radius that feeds the diameter profile
+(`path_radii_mm` in `calculate_metrics`):
+
+1. **Spacing-aware distance map.** A Euclidean distance transform of the
+   binary mask is computed with `distance_transform_edt(binary_mask,
+   sampling=(ps_y, ps_x))`. Every foreground pixel then holds its distance to
+   the nearest background pixel, in **millimetres**, with anisotropic spacing
+   handled correctly (the mask is laid out rows = Y, cols = X, so the sampling
+   order is `(ps_y, ps_x)`). This map is recomputed here on purpose. The
+   pixel-space map from `medial_axis` is not reused, because it would bias
+   radii when `ps_x ≠ ps_y`.
+2. **Sample along the centerline.** Each point of the final FMM centerline
+   (subpixel, extended to the wall) is rounded to its nearest pixel, and the
+   distance map is read there:
+   `r_local[i] = dist_map_mm[round(y_i), round(x_i)]`.
+   On a well-centred path, that distance to the nearest wall is the lumen
+   radius.
+3. **Unsmoothed.** The diameter profile is Gaussian-smoothed afterwards
+   (`DIAMETER_SMOOTHING_SIGMA`), but that smoothing goes into a separate array.
+   The cap uses the raw radii. No tip trimming is applied either, so the cap
+   covers every path point.
+
+The cap is then `κ_max[i] = 1 / (CURVATURE_CAP_RADIUS_FACTOR · r_local[i])`,
+which has the same units (1/mm) as the spline curvature. Edge behaviour:
+
+- **Near the tips**, where the path runs into the mask wall, `r_local` drops
+  toward 0 and κ_max grows very large. The cap is effectively loose there.
+- **Where `r_local = 0`** (a point that rounds onto a background pixel), κ_max
+  is set to ∞, meaning no cap at that point. This avoids dividing by zero.
+- A narrower stretch has a smaller radius, so its cap is less strict: tighter
+  bends are allowed there. So the cap adapts to the local calibre and is not
+  one global threshold.
+
+#### What `CURVATURE_CAP_RADIUS_FACTOR` does
+
+`CURVATURE_CAP_RADIUS_FACTOR` (in `main.py`, default `1.0`) sets the tightest
+bend the centerline is allowed to make, measured in local vessel radii. In
+radius-of-curvature terms (R = 1/κ), the cap enforces
+
+    R ≥ CURVATURE_CAP_RADIUS_FACTOR × r_local
+
+| Factor | Smallest allowed radius of curvature | Effect |
+|---|---|---|
+| `1.0` (default) | one lumen radius | Hard physical floor. A tighter bend would make the inner wall of the vessel fold over itself, so only impossible curvature is clipped |
+| `> 1.0` (e.g. `2.0`) | that many radii | More aggressive. It also clips bends that are physically possible but very sharp, and `curv_capped_frac` rises |
+| `< 1.0` | under one radius | Looser than physics allows. Projection-fold spikes start to come through again |
+| `0` or very small | – | κ_max becomes huge or infinite, which in effect turns the cap off |
+
+Worked example: on a 4 mm vein (`r_local` = 2 mm) with the default factor,
+κ_max = 1 / (1.0 × 2 mm) = 0.5 mm⁻¹, so no bend is tighter than a 2 mm radius.
+With factor `2.0`, κ_max is 0.25 mm⁻¹, which means a 4 mm radius.
+
+The default is the only value with a physical justification. Raise it only if
+you want to suppress sharp-but-real bends on purpose, and keep it fixed across
+a dataset. Changing it changes `max_curvature`, `std_curvature`,
+`avg_curvature`, the ∫|κ|ds turning totals, the turn counts and
+`curv_capped_frac`, so values computed with different factors can't be
+compared.
+
 `curv_capped_frac` is the fraction of path points where |κ| exceeded κ_max
 before clipping. It is not a vein-shape feature. It measures how much the
 curvature metrics were affected by projection artifacts, or by a jagged
